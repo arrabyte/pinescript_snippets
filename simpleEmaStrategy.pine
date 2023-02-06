@@ -1,0 +1,65 @@
+// This source code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// 2023 © CiclicaTrading/Alessandro Arrabito
+
+//@version=5
+strategy("Ciclica_Strategy_Ema", overlay=true)
+
+// Campi di input nella scheda dei settting
+int emaFastLen = input.int(7, "Ema Fast", step = 1, group = "Ma settings")
+int emaSlowLen = input.int(25, "Ema Slow", step = 1, group = "Ma settings")
+int trendMaLen = input.int(200, "Trend Ma", step = 1, group = "Ma settings")
+
+float stopLossPrc = input.float(1.0, "Stop Loss", group = "strategy settings") / 100
+float riskReward = input.float(2.0, "Risk reward", group = "strategy settings")
+
+// Calcolo delle medie mobili esponenziali
+emaFast = ta.ema(close, emaFastLen)
+emaSlow = ta.ema(close, emaSlowLen)
+trendMa = ta.ema(close, trendMaLen)
+
+// Funzoni grafiche per disegnare le medie mobili
+plot(emaFast, color = color.yellow, linewidth = 2)
+plot(emaSlow, color = color.blue, linewidth = 2)
+plot(trendMa, color = color.gray, linewidth = 2)
+
+// Condizioni di ingresso
+bool entryLong = ta.crossover(emaFast, emaSlow) and emaSlow > trendMa
+bool entryShort = ta.crossunder(emaFast, emaSlow)and emaSlow < trendMa
+
+// Grafica: disegno dei livelli del trade tramite funzioni plot e fill.
+
+//// Variabili che mantengono i livelli del trade in corso.
+var float stopLossLevel = na
+var float takeProfitLevel = na
+var float entryLevel = na
+
+entryLine = plot(entryLevel, color=color.yellow, style = plot.style_linebr)
+tpLine = plot(takeProfitLevel, color=color.green, style = plot.style_linebr)
+slLine = plot(stopLossLevel, color=color.red, style = plot.style_linebr)
+
+fill(entryLine, tpLine, color.new(color.green, 50))
+fill(entryLine, slLine, color.new(color.red, 50))
+
+// blocco di apertura dei trade long e short
+// se si verificano le condizioni.
+if entryLong and strategy.position_size == 0
+    entryLevel := close
+    stopLossLevel := close * (1 - stopLossPrc)
+    takeProfitLevel := close * (1 + stopLossPrc*riskReward)    
+    strategy.entry("long_id", strategy.long)
+    strategy.exit("long_exit_id", "long_id", stop = stopLossLevel, limit = takeProfitLevel)
+if entryShort and strategy.position_size == 0
+    entryLevel := close
+    stopLossLevel := close * (1 + stopLossPrc)
+    takeProfitLevel := close * (1 - stopLossPrc*riskReward)    
+    strategy.entry("short_id", strategy.short)
+    strategy.exit("short_exit_id", "short_id", stop = stopLossLevel, limit = takeProfitLevel)
+
+// Reset delle variabili in chiusura del trade.
+// Come accennato nel video, il seguente snippet di codice non gestisce il caso di un trade che 
+// inizia e finisce durante la stessa candela. Per questo lascio nel commento la soluzione.
+// condizioneDiUscita = strategy.position_size == 0 and strategy.closedtrades.exit_bar_index(strategy.closedtrades - 1) == bar_index
+if strategy.position_size == 0 and strategy.position_size[1] != 0
+    stopLossLevel := na
+    takeProfitLevel := na
+    entryLevel := na
