@@ -1,23 +1,37 @@
 // This source code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
-// 2023 © CiclicaTrading/Alessandro Arrabito
+// © CiclicaTrading - 2023 Strambatax (Alessandro Arrabito) 
+// https://www.youtube.com/watch?v=g7TNcMseFYE
 
-//@version=5
-strategy("Ciclica_Strategy_Ema", overlay=true)
+//@version=5 
+strategy("Ciclica_Strategy_Ema", overlay=true, default_qty_type=strategy.percent_of_equity, initial_capital = 1000,
+ default_qty_value=100,  commission_type=strategy.commission.percent, commission_value=0.061)
 
-// Campi di input nella scheda dei settting
+// Campi di input nella scheda dei settting 
 int emaFastLen = input.int(7, "Ema Fast", step = 1, group = "Ma settings")
-int emaSlowLen = input.int(25, "Ema Slow", step = 1, group = "Ma settings")
+int emaSlowLen = input.int(25, "Ema Slow", step = 1, group = "Ma settings") 
 int trendMaLen = input.int(200, "Trend Ma", step = 1, group = "Ma settings")
 
-float stopLossPrc = input.float(1.0, "Stop Loss", group = "strategy settings") / 100
-float riskReward = input.float(2.0, "Risk reward", group = "strategy settings")
+// offset del trailing stop espresso in percentuale
+float trailStopOffsetPrc = input.float(1.0, "Trail offset Prc", step=0.1, group = "strategy settings") / 100
+
+// risk reward 1:X quindi si imposta X cioè il valore di rendimento. 
+// default 1.0 => rischio = rendimento, se imporsto 2.0 => rendimento doppio rispetto al rischio.
+float riskReward = input.float(1.5, "Risk reward", step=0.1, group = "strategy settings")
+
+// periodo atr
+int atrLen = input.int(11, "atr len", group = "atr settings")
+
+// moltiplicatore per definire il livello di stop loss
+float atrMultiplier = input.float(3.0, "atr Multiplier", step=0.1, group = "atr settings")
+
+bool atrDraw = input.bool(false, "atr band draw", group = "atr settings")
 
 // Calcolo delle medie mobili esponenziali
 emaFast = ta.ema(close, emaFastLen)
 emaSlow = ta.ema(close, emaSlowLen)
 trendMa = ta.ema(close, trendMaLen)
 
-// Funzoni grafiche per disegnare le medie mobili
+// Funzioni grafiche per disegnare le medie mobili
 plot(emaFast, color = color.yellow, linewidth = 2)
 plot(emaSlow, color = color.blue, linewidth = 2)
 plot(trendMa, color = color.gray, linewidth = 2)
@@ -26,40 +40,87 @@ plot(trendMa, color = color.gray, linewidth = 2)
 bool entryLong = ta.crossover(emaFast, emaSlow) and emaSlow > trendMa
 bool entryShort = ta.crossunder(emaFast, emaSlow)and emaSlow < trendMa
 
-// Grafica: disegno dei livelli del trade tramite funzioni plot e fill.
-
 //// Variabili che mantengono i livelli del trade in corso.
 var float stopLossLevel = na
 var float takeProfitLevel = na
+var float partialTakeProfitLevel = na
 var float entryLevel = na
 
+// Grafica: disegno dei livelli del trade tramite funzioni plot e fill.
 entryLine = plot(entryLevel, color=color.yellow, style = plot.style_linebr)
+pTpLine = plot(partialTakeProfitLevel, color=color.fuchsia, style = plot.style_linebr, linewidth = 2)
 tpLine = plot(takeProfitLevel, color=color.green, style = plot.style_linebr)
 slLine = plot(stopLossLevel, color=color.red, style = plot.style_linebr)
 
 fill(entryLine, tpLine, color.new(color.green, 50))
 fill(entryLine, slLine, color.new(color.red, 50))
+ 
+float atr = ta.atr(atrLen)
+float atrOffset = atr*atrMultiplier
+
+plot(atrDraw ? close + atrOffset : na)
+plot(atrDraw ? close - atrOffset : na)
+
+
+getTickValue() =>
+    syminfo.mintick * syminfo.pointvalue
+
+trailStopOffset = close * trailStopOffsetPrc / getTickValue()
 
 // blocco di apertura dei trade long e short
 // se si verificano le condizioni.
 if entryLong and strategy.position_size == 0
     entryLevel := close
-    stopLossLevel := close * (1 - stopLossPrc)
-    takeProfitLevel := close * (1 + stopLossPrc*riskReward)    
+
+    // stop loss proporzionale al livello di atr
+    stopLossLevel := close - atrOffset
+    takeProfitLevel := close + atrOffset*riskReward
+    partialTakeProfitLevel := close + atrOffset*riskReward/2
+
     strategy.entry("long_id", strategy.long)
-    strategy.exit("long_exit_id", "long_id", stop = stopLossLevel, limit = takeProfitLevel)
+    strategy.exit("p1_long_exit_id", "long_id", stop = stopLossLevel, limit = partialTakeProfitLevel, qty_percent = 50)
+    strategy.exit("long_exit_id", "long_id", stop = stopLossLevel, trail_price = takeProfitLevel, trail_offset = trailStopOffset)
 if entryShort and strategy.position_size == 0
     entryLevel := close
-    stopLossLevel := close * (1 + stopLossPrc)
-    takeProfitLevel := close * (1 - stopLossPrc*riskReward)    
-    strategy.entry("short_id", strategy.short)
-    strategy.exit("short_exit_id", "short_id", stop = stopLossLevel, limit = takeProfitLevel)
+    stopLossLevel := close + atrOffset
+    takeProfitLevel := close - atrOffset*riskReward
+    partialTakeProfitLevel := close - atrOffset*riskReward/2 
 
+    strategy.entry("short_id", strategy.short)
+    strategy.exit("p1_short_exit_id", "short_id", stop = stopLossLevel, limit = partialTakeProfitLevel, qty_percent = 50)
+    strategy.exit("short_exit_id", "short_id", stop = stopLossLevel, trail_price = takeProfitLevel, trail_offset = trailStopOffset)
+
+// blocco per abilitira la chiusura a breakeven
+// if strategy.position_size > 0 and high > partialTakeProfitLevel and barstate.isconfirmed
+//     stopLossLevel := entryLevel
+//     strategy.exit("long_exit_id", "long_id", stop = stopLossLevel, trail_price = takeProfitLevel, trail_offset = trailStopOffset)
+// if strategy.position_size < 0 and low < partialTakeProfitLevel and barstate.isconfirmed
+//     stopLossLevel := entryLevel
+//     strategy.exit("short_exit_id", "short_id", stop = stopLossLevel, trail_price = takeProfitLevel, trail_offset = trailStopOffset)
+ 
 // Reset delle variabili in chiusura del trade.
 // Come accennato nel video, il seguente snippet di codice non gestisce il caso di un trade che 
 // inizia e finisce durante la stessa candela. Per questo lascio nel commento la soluzione.
 // condizioneDiUscita = strategy.position_size == 0 and strategy.closedtrades.exit_bar_index(strategy.closedtrades - 1) == bar_index
-if strategy.position_size == 0 and strategy.position_size[1] != 0
+if strategy.position_size == 0 and strategy.closedtrades.exit_bar_index(strategy.closedtrades - 1) == bar_index
     stopLossLevel := na
     takeProfitLevel := na
+    partialTakeProfitLevel := na
     entryLevel := na
+
+var float totProfit = 0
+if ta.change(strategy.closedtrades)
+    tradeIndex = strategy.closedtrades -1
+    tradeId = strategy.closedtrades.exit_id(tradeIndex)
+    if tradeId == "long_exit_id" or tradeId == "short_exit_id"
+        p2 = strategy.closedtrades.profit(tradeIndex)
+        p1 = strategy.closedtrades.profit(tradeIndex - 1)
+        label.new(bar_index, high, str.format("{0, number, #.##}", p1+p2), style = label.style_label_upper_right, color = p1+p2 > 0 ? color.green : color.red)
+        totProfit += p1 + p2
+
+// tabella riepilogo dati strategia
+var tableInfo = table.new(position.top_right, 2,2)
+tableInfo.set_bgcolor(color.white)
+table.cell(tableInfo, 0, 0, "Info")
+table.cell(tableInfo, 0, 1, "Profit")
+table.cell(tableInfo, 1, 1, str.format("{0, number, #.##}", totProfit))
