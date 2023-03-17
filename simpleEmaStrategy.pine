@@ -2,8 +2,14 @@
 // © CiclicaTrading - 2023 Strambatax (Alessandro Arrabito) 
 // https://www.youtube.com/watch?v=g7TNcMseFYE
 
+// ████████  ██     ██
+// ██░██░░░   ██  ██
+// ████████░    ██
+//    ██ ██   ██  ██
+// ████████  ██     ██
+
 //@version=5 
-strategy("Ciclica_Strategy_Ema", overlay=true, default_qty_type=strategy.percent_of_equity, initial_capital = 1000,
+strategy("Kondor_Ema", overlay=true, default_qty_type=strategy.percent_of_equity, initial_capital = 1000,
  default_qty_value=100,  commission_type=strategy.commission.percent, commission_value=0.061)
 
 // Campi di input nella scheda dei settting 
@@ -12,11 +18,15 @@ int emaSlowLen = input.int(25, "Ema Slow", step = 1, group = "Ma settings")
 int trendMaLen = input.int(200, "Trend Ma", step = 1, group = "Ma settings")
 
 // offset del trailing stop espresso in percentuale
+bool enableTrailStopOnTp = input.bool(false, "Enable Trail stop on take profit", group = "strategy settings")
 float trailStopOffsetPrc = input.float(1.0, "Trail offset Prc", step=0.1, group = "strategy settings") / 100
+bool enableTrailStopLossAtr = input.bool(false, "Trail stop loss by Atr", group = "strategy settings")
 
 // risk reward 1:X quindi si imposta X cioè il valore di rendimento. 
 // default 1.0 => rischio = rendimento, se imporsto 2.0 => rendimento doppio rispetto al rischio.
+bool enablePartialTp = input.bool(false, "Enable partial take profit", group = "strategy settings")
 float riskReward = input.float(1.5, "Risk reward", step=0.1, group = "strategy settings")
+bool breakEvenEnabled = input.bool(true, "Break Even Enabled", tooltip = "if enabled move stop to breakevent if price reach partial take profit", group = "strategy settings")
 
 // periodo atr
 int atrLen = input.int(11, "atr len", group = "atr settings")
@@ -25,6 +35,11 @@ int atrLen = input.int(11, "atr len", group = "atr settings")
 float atrMultiplier = input.float(3.0, "atr Multiplier", step=0.1, group = "atr settings")
 
 bool atrDraw = input.bool(false, "atr band draw", group = "atr settings")
+
+string botLongEntryCmd = input.text_area("", "wundertrading entry long command", group = "bot")
+string botLongExitCmd = input.text_area("", "wundertrading exit long command", group = "bot")
+string botShortEntryCmd = input.text_area("", "wundertrading entry short command", group = "bot")
+string botShortExitCmd = input.text_area("", "wundertrading exit short command", group = "bot")
 
 // Calcolo delle medie mobili esponenziali
 emaFast = ta.ema(close, emaFastLen)
@@ -37,14 +52,19 @@ plot(emaSlow, color = color.blue, linewidth = 2)
 plot(trendMa, color = color.gray, linewidth = 2)
 
 // Condizioni di ingresso
-bool entryLong = ta.crossover(emaFast, emaSlow) and emaSlow > trendMa
-bool entryShort = ta.crossunder(emaFast, emaSlow)and emaSlow < trendMa
+bool emaCrossLong = ta.crossover(emaFast, emaSlow)
+bool emaCrossShort = ta.crossunder(emaFast, emaSlow)
+
+bool entryLong = emaCrossLong and emaSlow > trendMa
+bool entryShort = emaCrossShort and emaSlow < trendMa
 
 //// Variabili che mantengono i livelli del trade in corso.
 var float stopLossLevel = na
 var float takeProfitLevel = na
 var float partialTakeProfitLevel = na
 var float entryLevel = na
+var float beLevel = na
+
 
 // Grafica: disegno dei livelli del trade tramite funzioni plot e fill.
 entryLine = plot(entryLevel, color=color.yellow, style = plot.style_linebr)
@@ -61,11 +81,23 @@ float atrOffset = atr*atrMultiplier
 plot(atrDraw ? close + atrOffset : na)
 plot(atrDraw ? close - atrOffset : na)
 
-
 getTickValue() =>
     syminfo.mintick * syminfo.pointvalue
 
 trailStopOffset = close * trailStopOffsetPrc / getTickValue()
+
+// Questa funzione aggiorna i livelli di uscita con trail e senza trail.
+updateExits(direction) =>
+    if direction == "long"    
+        if enableTrailStopOnTp
+            strategy.exit("long_exit_id", "long_id", stop = stopLossLevel, trail_price = takeProfitLevel, trail_offset = trailStopOffset)
+        else
+            strategy.exit("long_exit_id", "long_id", stop = stopLossLevel, limit = takeProfitLevel, alert_message = botLongExitCmd)
+    else if direction == "short"   
+        if enableTrailStopOnTp
+            strategy.exit("short_exit_id", "short_id", stop = stopLossLevel, trail_price = takeProfitLevel, trail_offset = trailStopOffset)
+        else
+            strategy.exit("short_exit_id", "short_id", stop = stopLossLevel, limit = takeProfitLevel, alert_message = botShortExitCmd)
 
 // blocco di apertura dei trade long e short
 // se si verificano le condizioni.
@@ -75,29 +107,50 @@ if entryLong and strategy.position_size == 0
     // stop loss proporzionale al livello di atr
     stopLossLevel := close - atrOffset
     takeProfitLevel := close + atrOffset*riskReward
-    partialTakeProfitLevel := close + atrOffset*riskReward/2
+    partialTakeProfitLevel := enablePartialTp ? close + atrOffset*riskReward/2 : na
+    beLevel := close + atrOffset*riskReward/2
 
-    strategy.entry("long_id", strategy.long)
-    strategy.exit("p1_long_exit_id", "long_id", stop = stopLossLevel, limit = partialTakeProfitLevel, qty_percent = 50)
-    strategy.exit("long_exit_id", "long_id", stop = stopLossLevel, trail_price = takeProfitLevel, trail_offset = trailStopOffset)
+    strategy.entry("long_id", strategy.long, alert_message = botLongEntryCmd)
+    if not na(partialTakeProfitLevel)
+        strategy.exit("p1_long_exit_id", "long_id", stop = stopLossLevel, limit = partialTakeProfitLevel, qty_percent = 50)
+    updateExits("long")
 if entryShort and strategy.position_size == 0
     entryLevel := close
     stopLossLevel := close + atrOffset
     takeProfitLevel := close - atrOffset*riskReward
-    partialTakeProfitLevel := close - atrOffset*riskReward/2 
+    partialTakeProfitLevel := enablePartialTp ? close - atrOffset*riskReward/2 : na
+    beLevel := close - atrOffset*riskReward/2
 
-    strategy.entry("short_id", strategy.short)
-    strategy.exit("p1_short_exit_id", "short_id", stop = stopLossLevel, limit = partialTakeProfitLevel, qty_percent = 50)
-    strategy.exit("short_exit_id", "short_id", stop = stopLossLevel, trail_price = takeProfitLevel, trail_offset = trailStopOffset)
+    strategy.entry("short_id", strategy.short, alert_message = botShortEntryCmd)    
+    if not na(partialTakeProfitLevel)
+        strategy.exit("p1_short_exit_id", "short_id", stop = stopLossLevel, limit = partialTakeProfitLevel, qty_percent = 50)
+    updateExits("short")
 
 // blocco per abilitira la chiusura a breakeven
-// if strategy.position_size > 0 and high > partialTakeProfitLevel and barstate.isconfirmed
-//     stopLossLevel := entryLevel
-//     strategy.exit("long_exit_id", "long_id", stop = stopLossLevel, trail_price = takeProfitLevel, trail_offset = trailStopOffset)
-// if strategy.position_size < 0 and low < partialTakeProfitLevel and barstate.isconfirmed
-//     stopLossLevel := entryLevel
-//     strategy.exit("short_exit_id", "short_id", stop = stopLossLevel, trail_price = takeProfitLevel, trail_offset = trailStopOffset)
- 
+if breakEvenEnabled and strategy.position_size > 0 and high > beLevel and barstate.isconfirmed
+    stopLossLevel := entryLevel
+    updateExits("long")
+if breakEvenEnabled and strategy.position_size < 0 and low < beLevel and barstate.isconfirmed
+    stopLossLevel := entryLevel
+    updateExits("short")
+
+// trailing stop loss atr
+if strategy.position_size > 0 and barstate.isconfirmed and enableTrailStopLossAtr
+    //if atrOffset > stopLossLevel 
+    if close - atrOffset > stopLossLevel 
+        stopLossLevel := close - atrOffset
+        if not na(partialTakeProfitLevel)
+            strategy.exit("p1_long_exit_id", "long_id", stop = stopLossLevel, limit = partialTakeProfitLevel, qty_percent = 50)
+        updateExits("long")
+if strategy.position_size < 0 and barstate.isconfirmed and enableTrailStopLossAtr
+    //if atrOffset < stopLossLevel 
+    if close + atrOffset < stopLossLevel 
+        stopLossLevel := close + atrOffset
+        if not na(partialTakeProfitLevel)
+            strategy.exit("p1_short_exit_id", "short_id", stop = stopLossLevel, limit = partialTakeProfitLevel, qty_percent = 50)
+        updateExits("short")
+
+
 // Reset delle variabili in chiusura del trade.
 // Come accennato nel video, il seguente snippet di codice non gestisce il caso di un trade che 
 // inizia e finisce durante la stessa candela. Per questo lascio nel commento la soluzione.
@@ -107,6 +160,7 @@ if strategy.position_size == 0 and strategy.closedtrades.exit_bar_index(strategy
     takeProfitLevel := na
     partialTakeProfitLevel := na
     entryLevel := na
+    beLevel := na
 
 var float totProfit = 0
 if ta.change(strategy.closedtrades)
@@ -115,7 +169,7 @@ if ta.change(strategy.closedtrades)
     if tradeId == "long_exit_id" or tradeId == "short_exit_id"
         p2 = strategy.closedtrades.profit(tradeIndex)
         p1 = strategy.closedtrades.profit(tradeIndex - 1)
-        label.new(bar_index, high, str.format("{0, number, #.##}", p1+p2), style = label.style_label_upper_right, color = p1+p2 > 0 ? color.green : color.red)
+        label.new(bar_index, close, str.format("{0, number, #.##}", p1+p2), style = label.style_label_lower_left, color = p1+p2 > 0 ? color.green : color.red)
         totProfit += p1 + p2
 
 // tabella riepilogo dati strategia
@@ -124,3 +178,11 @@ tableInfo.set_bgcolor(color.white)
 table.cell(tableInfo, 0, 0, "Info")
 table.cell(tableInfo, 0, 1, "Profit")
 table.cell(tableInfo, 1, 1, str.format("{0, number, #.##}", totProfit))
+
+// Settings
+// FTMUSDT TF 1H
+// ema 7, 23, 200
+// enable partial tp
+// RR 1,6
+// enable breakeven
+// ATR len 3 mul 3.1
