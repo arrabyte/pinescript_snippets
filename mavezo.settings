@@ -1,0 +1,26 @@
+Token: FTMUSDT
+Ema Fast: 7
+Ema Slow: 23
+Ema Trend: 200
+RR: 1.6
+Enable trail: False
+Trail Offset: 
+Break Even: True
+Vzo: enabled
+Vzo len: 14
+Vzo enable smoothing: True
+Vzo noise filter len: 4
+Vzo long threshold:   60
+Vzo short threshold: -60
+
+Backtest 2022/1/1 - 2023/14/07
+Bybit perpetual
+leverage 2
+Fixed stake amount
+Without compound interest
+Commission 0.061%
+Net profit: 436.71%
+Tot trades: 124
+Profit factor: 1.975
+Drawdown: 18.83%
+Average trade: 1.76%

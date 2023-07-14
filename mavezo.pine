@@ -1,0 +1,185 @@
+// This source code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// © Alessandro Arrabito - 2023 Strambatax 
+// 
+
+// ████████  ██     ██
+// ██░██░░░   ██  ██
+// ████████░    ██
+//    ██ ██   ██  ██
+// ████████  ██     ██
+
+// MAVEZO: is the anagram of ema and vzo as the strategy is mainly based on this two tecnical indicator/oscillator
+// revisions and settings available on https://github.com/arrabyte/pinescript_snippets
+
+//@version=5 
+strategy("mavezo", overlay=true, default_qty_type=strategy.percent_of_equity, initial_capital = 1000,
+ default_qty_value=100,  commission_type=strategy.commission.percent, commission_value=0.061)
+
+import TradingView/ta/5
+
+// Campi di input nella scheda dei settting 
+int emaFastLen = input.int(7, "Ema Fast", step = 1, group = "Ma settings")
+int emaSlowLen = input.int(25, "Ema Slow", step = 1, group = "Ma settings") 
+int trendMaLen = input.int(200, "Trend Ma", step = 1, group = "Ma settings")
+
+// offset del trailing stop espresso in percentuale
+bool enableTrailStopOnTp = input.bool(false, "Enable Trail stop on take profit", group = "risk management")
+float trailStopOffsetPrc = input.float(1.0, "Trail offset Prc", step=0.1, group = "risk management") / 100
+bool enableTrailStopLossAtr = input.bool(false, "Trail stop loss by Atr", group = "risk management")
+ 
+// risk reward ratio. Default 1 (risk = reward).
+float riskReward = input.float(1.0, "risk reward ratio", step=0.1, group = "risk management")
+bool breakEvenEnabled = input.bool(true, "Break Even Enabled", tooltip = "if enabled move stop to breakevent if price reach partial take profit", group = "risk management")
+
+// periodo atr
+int atrLen = input.int(11, "atr len", group = "atr settings")
+
+// moltiplicatore per definire il livello di stop loss
+float atrMultiplier = input.float(3.0, "atr Multiplier", step=0.1, group = "atr settings")
+
+bool atrDraw = input.bool(false, "atr band draw", group = "atr settings")
+
+// ----- ema ------ //
+// Calcolo delle medie mobili esponenziali
+emaFast = ta.ema(close, emaFastLen)
+emaSlow = ta.ema(close, emaSlowLen)
+trendMa = ta.ema(close, trendMaLen)
+plot(emaFast, color = color.yellow, linewidth = 2)
+plot(emaSlow, color = color.blue, linewidth = 2)
+plot(trendMa, color = color.gray, linewidth = 2)
+// ----- ENd ema ------ //
+
+// ----- vzo ------ //
+vzo_enabled     = input.bool(false, 'vzo', group = 'vzo filter')
+vzo_length      = input.int(14, 'vzo Length', minval=2, group = 'vzo filter')
+vzo_average    = input.bool(true, 'average:Enable Smoothing', group = 'vzo filter')
+vzo_noise       = input.int(4, 'average:Noise Filter', minval=2, group = 'vzo filter')
+vzo_long_threshold  = input.int(0, 'long threshold', minval=-40, maxval=100, group = 'vzo filter', inline='long thresholds')
+vzo_long_threshold_upperbound = input.int(100, 'bound', minval=0, maxval=100, group = 'vzo filter', inline='long thresholds')
+vzo_short_threshold  = input.int(0, 'short threshold', minval=-100, maxval=40, group = 'vzo filter', inline='short thresholds')
+vzo_short_threshold_lowerbound = input.int(-100, 'bound', minval=-100, maxval=0, group = 'vzo filter', inline='short thresholds')
+
+vzo =  ta.vzo(vzo_length)
+
+if vzo_average
+    vzo := ta.ema(vzo, vzo_noise)
+
+vzo_long = vzo_enabled ? vzo >= vzo_long_threshold and vzo  <= vzo_long_threshold_upperbound : true
+vzo_short = vzo_enabled ? vzo <= vzo_short_threshold and vzo >= vzo_short_threshold_lowerbound : true
+// ----- ENd vzo ------ //
+
+string botLongEntryCmd = input.text_area("", "wundertrading entry long command", group = "bot")
+string botLongExitCmd = input.text_area("", "wundertrading exit long command", group = "bot")
+string botShortEntryCmd = input.text_area("", "wundertrading entry short command", group = "bot")
+string botShortExitCmd = input.text_area("", "wundertrading exit short command", group = "bot")
+
+// Condizioni di ingresso
+bool entryLong = ta.crossover(emaFast, emaSlow) and emaSlow > trendMa and vzo_long
+bool entryShort = ta.crossunder(emaFast, emaSlow) and emaSlow < trendMa and vzo_short
+
+//// Trade variables.
+var float stopLossLevel = na
+var float takeProfitLevel = na
+var float partialTakeProfitLevel = na
+var float entryLevel = na
+var float beLevel = na
+
+/// ----- atr ------ //
+float atr = ta.atr(atrLen)
+float atrOffset = atr*atrMultiplier
+
+plot(atrDraw ? close + atrOffset : na)
+plot(atrDraw ? close - atrOffset : na)
+// ----- ENd atr ------ //
+
+getTickValue() =>
+    syminfo.mintick * syminfo.pointvalue
+
+trailStopOffset = close * trailStopOffsetPrc / getTickValue()
+
+// Questa funzione aggiorna i livelli di uscita con trail e senza trail.
+updateExits(direction) =>
+    if direction == "long"    
+        if enableTrailStopOnTp
+            strategy.exit("long_exit_id", "long_id", stop = stopLossLevel, trail_price = takeProfitLevel, trail_offset = trailStopOffset)
+        else
+            strategy.exit("long_exit_id", "long_id", stop = stopLossLevel, limit = takeProfitLevel, alert_message = botLongExitCmd)
+    else if direction == "short"   
+        if enableTrailStopOnTp
+            strategy.exit("short_exit_id", "short_id", stop = stopLossLevel, trail_price = takeProfitLevel, trail_offset = trailStopOffset)
+        else
+            strategy.exit("short_exit_id", "short_id", stop = stopLossLevel, limit = takeProfitLevel, alert_message = botShortExitCmd)
+
+// blocco di apertura dei trade long e short
+// se si verificano le condizioni.
+if entryLong and strategy.position_size == 0
+    entryLevel := close
+
+    // stop loss proporzionale al livello di atr
+    stopLossLevel := close - atrOffset
+    takeProfitLevel := close + atrOffset*riskReward
+    beLevel := close + atrOffset*riskReward/2
+
+    strategy.entry("long_id", strategy.long, alert_message = botLongEntryCmd)
+    if not na(partialTakeProfitLevel)
+        strategy.exit("p1_long_exit_id", "long_id", stop = stopLossLevel, limit = partialTakeProfitLevel, qty_percent = 50)
+    updateExits("long")
+if entryShort and strategy.position_size == 0
+    entryLevel := close
+    stopLossLevel := close + atrOffset
+    takeProfitLevel := close - atrOffset*riskReward
+    beLevel := close - atrOffset*riskReward/2
+
+    strategy.entry("short_id", strategy.short, alert_message = botShortEntryCmd)    
+    updateExits("short")
+
+// blocco per abilitira la chiusura a breakeven
+if breakEvenEnabled and strategy.position_size > 0 and high > beLevel and barstate.isconfirmed
+    stopLossLevel := entryLevel
+    updateExits("long")
+if breakEvenEnabled and strategy.position_size < 0 and low < beLevel and barstate.isconfirmed
+    stopLossLevel := entryLevel
+    updateExits("short")
+
+// trailing stop loss atr
+if strategy.position_size > 0 and barstate.isconfirmed and enableTrailStopLossAtr
+    if close - atrOffset > stopLossLevel 
+        stopLossLevel := close - atrOffset
+        updateExits("long")
+if strategy.position_size < 0 and barstate.isconfirmed and enableTrailStopLossAtr
+    if close + atrOffset < stopLossLevel 
+        stopLossLevel := close + atrOffset
+        updateExits("short")
+
+// Reset delle variabili in chiusura del trade.
+if strategy.position_size == 0 and strategy.closedtrades.exit_bar_index(strategy.closedtrades - 1) == bar_index
+    stopLossLevel := na
+    takeProfitLevel := na
+    partialTakeProfitLevel := na
+    entryLevel := na
+    beLevel := na
+
+var float totProfit = 0
+if ta.change(strategy.closedtrades)
+    tradeIndex = strategy.closedtrades -1
+    tradeId = strategy.closedtrades.exit_id(tradeIndex)
+    if tradeId == "long_exit_id" or tradeId == "short_exit_id"
+        p = strategy.closedtrades.profit(tradeIndex)
+        label.new(bar_index, close, str.format("{0, number, #.##}", p), style = label.style_label_lower_left, color = p > 0 ? color.green : color.red)
+        totProfit += p
+
+// tabella riepilogo dati strategia
+var tableInfo = table.new(position.top_right, 2,2)
+tableInfo.set_bgcolor(color.white)
+table.cell(tableInfo, 0, 0, "Info")
+table.cell(tableInfo, 0, 1, "Profit")
+table.cell(tableInfo, 1, 1, str.format("{0, number, #.##}", totProfit))
+
+// Grafica: disegno dei livelli del trade tramite funzioni plot e fill.
+entryLine = plot(entryLevel, color=color.yellow, style = plot.style_linebr)
+pTpLine = plot(partialTakeProfitLevel, color=color.fuchsia, style = plot.style_linebr, linewidth = 2)
+tpLine = plot(takeProfitLevel, color=color.green, style = plot.style_linebr)
+slLine = plot(stopLossLevel, color=color.red, style = plot.style_linebr)
+
+fill(entryLine, tpLine, color.new(color.green, 50))
+fill(entryLine, slLine, color.new(color.red, 50))
