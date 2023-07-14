@@ -11,9 +11,10 @@
 // MAVEZO: is the anagram of ema and vzo as the strategy is mainly based on this two tecnical indicator/oscillator
 // revisions and settings available on https://github.com/arrabyte/pinescript_snippets
 
-//@version=5 
-strategy("mavezo", overlay=true, default_qty_type=strategy.percent_of_equity, initial_capital = 1000,
- default_qty_value=100,  commission_type=strategy.commission.percent, commission_value=0.061)
+//@version=5
+
+strategy("mavezo", overlay=true, default_qty_type=strategy.cash, initial_capital = 1000, default_qty_value=2000, 
+ commission_type=strategy.commission.percent, commission_value=0.061, margin_long=0.5, margin_short=0.5)
 
 import TradingView/ta/5
 
