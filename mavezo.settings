@@ -2,10 +2,12 @@ Token: FTMUSDT
 Ema Fast: 7
 Ema Slow: 23
 Ema Trend: 200
+Enable trail stop: False
+Trail stop Offset: 
 RR: 1.6
-Enable trail: False
-Trail Offset: 
-Break Even: True
+Breakeven: True
+Atr len: 3
+Atr multiplier: 3.1
 Vzo: enabled
 Vzo len: 14
 Vzo enable smoothing: True
