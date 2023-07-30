@@ -1,0 +1,54 @@
+// This source code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// © Strambatax
+
+// ████████  ██     ██
+// ██░██░░░   ██  ██
+// ████████░    ██
+//    ██ ██   ██  ██
+// ████████  ██     ██
+
+//@version=5
+indicator("Stx Ma-Trend Finder", overlay = true)
+
+ma_type = input.string("hma", "MA type", group="MA Settings", options=["sma", "ema", "hma", "rma", "wma", "swma", "vwma", "tema"])
+ma_length = input.int(100, "ma length", group="MA Settings")
+ma_source = input.source(close, "source", group="MA Settings")
+ma_slope_filter_ratio = input.float(0.053, "ma slope ratio", step=0.001, minval=0, maxval = 1.000, group="MA Settings")
+
+// ---------- @Misc Functions ---------- \\ 
+tema(src, len) =>
+    ema1 = ta.ema(src, len)
+    ema2 = ta.ema(ema1, len)
+    ema3 = ta.ema(ema2, len)
+    (3 * ema1) - (3 * ema2) + ema3
+
+ma_by_type(src, len, mode) =>
+    switch str.lower(mode)
+        "sma" => ta.sma(src, len)
+        "ema" => ta.ema(src, len)
+        "hma" => ta.hma(src, len)
+        "rma" => ta.rma(src, len)
+        "wma" => ta.wma(src, len)
+        "swma" => ta.swma(src)
+        "vwma" => ta.vwma(src, len)
+        "hull" => ta.wma((2 * ta.wma(src, len / 2)) - ta.wma(src, len), math.round(math.sqrt(len)))
+        "tema" => tema(src, len)
+        => ta.sma(src, len)
+
+// ---------- @ENd Misc Functions ---------- \\ 
+
+ma = ma_by_type(ma_source, ma_length, ma_type)
+
+// max ma spread observed from the first bar
+max_ma_spread = ta.max(math.abs(ma - ma[1]))
+ma_spread = ma - ma[1]
+
+// level of slope is proportional to the 
+// inclination of the slope
+ma_slope_level = (ma_spread / max_ma_spread)
+
+ma_slope_bull = ma_slope_level > ma_slope_filter_ratio
+ma_slope_bear = ma_slope_level < -ma_slope_filter_ratio
+
+ma_color = ma_slope_bull ? color.green : ma_slope_bear ? color.red :  color.rgb(0, 74, 212)
+plot(ma, color = ma_color, title = "Ma line")
